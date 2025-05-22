@@ -2,15 +2,26 @@
   <div class="max-w-7xl mx-auto p-4">
     <h2 class="text-2xl font-semibold mb-4">Daftar Pasien</h2>
 
-    <!-- Dropdown perPage -->
-    <div class="mb-4 flex justify-end items-center space-x-2">
-      <label class="text-sm">Tampilkan:</label>
-      <select v-model="perPage" @change="fetchPasiens(1)" class="border px-2 py-1 rounded text-sm">
-        <option :value="3">3</option>
-        <option :value="5">5</option>
-        <option :value="10">10</option>
-        <option :value="25">25</option>
-      </select>
+    <!-- Controls: Dropdown perPage + Search -->
+    <div class="mb-4 flex justify-between items-center space-x-4">
+      <!-- Dropdown perPage -->
+      <div class="flex items-center space-x-2">
+        <label class="text-sm">Tampilkan:</label>
+        <select v-model="perPage" @change="fetchPasiens(1)" class="border px-2 py-1 rounded text-sm">
+          <option :value="3">3</option>
+          <option :value="5">5</option>
+          <option :value="10">10</option>
+          <option :value="25">25</option>
+        </select>
+      </div>
+
+      <!-- Input Search -->
+      <input
+        type="text"
+        v-model="search"
+        placeholder="Cari pasien..."
+        class="border border-gray-300 rounded px-3 py-2 text-sm w-1/3"
+      />
     </div>
 
     <!-- Tabel -->
@@ -63,7 +74,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import axios from '@/plugins/axios'
 
 const pasiens = ref([])
@@ -74,8 +85,12 @@ const pagination = ref({
   current_page: 1,
   links: [],
   prev_page_url: null,
-  next_page_url: null
+  next_page_url: null,
 })
+
+// Untuk search dan debounce
+const search = ref('')
+let debounceTimeout = null
 
 const fetchPasiens = async (page = 1) => {
   loading.value = true
@@ -83,7 +98,8 @@ const fetchPasiens = async (page = 1) => {
     const response = await axios.get('/pasiens', {
       params: {
         page,
-        per_page: perPage.value
+        per_page: perPage.value,
+        search: search.value, // kirim param search ke API
       }
     })
     const data = response.data
@@ -108,6 +124,14 @@ const changePageFromUrl = (url) => {
   const page = urlObj.searchParams.get('page')
   if (page) fetchPasiens(parseInt(page))
 }
+
+// Watch search dengan debounce 500ms
+watch(search, () => {
+  if (debounceTimeout) clearTimeout(debounceTimeout)
+  debounceTimeout = setTimeout(() => {
+    fetchPasiens(1) // reset ke halaman 1 saat search berubah
+  }, 500)
+})
 
 onMounted(() => {
   fetchPasiens(1)
