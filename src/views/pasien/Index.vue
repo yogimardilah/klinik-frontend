@@ -1,188 +1,115 @@
 <template>
-  <div>
-    <!-- Pencarian -->
-    <div class="toolbar">
-      <input v-model="search" @input="onSearchInput" placeholder="Cari nama..." class="search-input" />
-      <button @click="exportExcel" class="btn-green">Export Excel</button>
-      <button @click="exportPDF" class="btn-red">Export PDF</button>
+  <div class="max-w-7xl mx-auto p-4">
+    <h2 class="text-2xl font-semibold mb-4">Daftar Pasien</h2>
+
+    <!-- Dropdown perPage -->
+    <div class="mb-4 flex justify-end items-center space-x-2">
+      <label class="text-sm">Tampilkan:</label>
+      <select v-model="perPage" @change="fetchPasiens(1)" class="border px-2 py-1 rounded text-sm">
+        <option :value="3">3</option>
+        <option :value="5">5</option>
+        <option :value="10">10</option>
+        <option :value="25">25</option>
+      </select>
     </div>
 
-    <!-- Table Pasien -->
-    <vue3-easy-data-table :headers="headers" :items="pasiens" :server-options="serverOptions"
-      :server-items-length="totalItems" :rows-per-page="perPage" @update:server-options="onServerOptionsUpdate">
-      <template #item-actions="{ item }">
-      </template>
-    </vue3-easy-data-table>
+    <!-- Tabel -->
+    <table class="min-w-full border border-gray-300 rounded-md overflow-hidden">
+      <thead class="bg-gray-100">
+        <tr>
+          <th class="text-left px-4 py-2 border-b border-gray-300">Nama</th>
+          <th class="text-left px-4 py-2 border-b border-gray-300">NIK</th>
+          <th class="text-left px-4 py-2 border-b border-gray-300">No HP</th>
+          <th class="text-left px-4 py-2 border-b border-gray-300">Alamat</th>
+          <th class="text-left px-4 py-2 border-b border-gray-300">Tanggal Lahir</th>
+          <th class="text-left px-4 py-2 border-b border-gray-300">Jenis Kelamin</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-if="loading">
+          <td colspan="6" class="text-center py-4 text-gray-500">Memuat data...</td>
+        </tr>
+        <tr v-else-if="pasiens.length === 0">
+          <td colspan="6" class="text-center py-4 text-gray-500">Data tidak ditemukan</td>
+        </tr>
+        <tr v-else v-for="pasien in pasiens" :key="pasien.id" class="odd:bg-white even:bg-gray-50">
+          <td class="px-4 py-2 border-b border-gray-200">{{ pasien.nama }}</td>
+          <td class="px-4 py-2 border-b border-gray-200">{{ pasien.nik }}</td>
+          <td class="px-4 py-2 border-b border-gray-200">{{ pasien.no_hp }}</td>
+          <td class="px-4 py-2 border-b border-gray-200">{{ pasien.alamat }}</td>
+          <td class="px-4 py-2 border-b border-gray-200">{{ pasien.tanggal_lahir }}</td>
+          <td class="px-4 py-2 border-b border-gray-200">{{ pasien.jenis_kelamin }}</td>
+        </tr>
+      </tbody>
+    </table>
 
-    <!-- Pagination Laravel -->
-    <div class="pagination">
-      <button :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">«</button>
-      <span>Halaman {{ currentPage }} / {{ lastPage }}</span>
-      <button :disabled="currentPage === lastPage" @click="goToPage(currentPage + 1)">»</button>
+    <!-- Pagination -->
+    <div class="mt-6 flex justify-center space-x-2">
+      <button
+        v-for="link in pagination.links"
+        :key="link.label"
+        :disabled="!link.url"
+        @click="changePageFromUrl(link.url)"
+        :class="[
+          'px-3 py-1 rounded border border-gray-300 hover:bg-gray-200',
+          link.active ? 'bg-blue-600 text-white border-blue-600' : '',
+          !link.url ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+        ]"
+      >
+        <span v-html="link.label"></span>
+      </button>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
-import axios from 'axios'
-import Vue3EasyDataTable from 'vue3-easy-data-table'
-import 'vue3-easy-data-table/dist/style.css'
+import { ref, onMounted } from 'vue'
+import axios from '@/plugins/axios'
 
 const pasiens = ref([])
-const search = ref('')
-const currentPage = ref(1)
-const lastPage = ref(1)
-const perPage = ref(5)
+const perPage = ref(3)
+const loading = ref(false)
 
-const sortBy = ref('')
-const sortDesc = ref(false)
-
-const headers = [
-  { text: 'Nama', value: 'nama', sortable: true },
-  { text: 'NIK', value: 'nik', sortable: true },
-  { text: 'No HP', value: 'no_hp', sortable: true },
-  { text: 'Alamat', value: 'alamat', sortable: false },
-  { text: 'Tanggal Lahir', value: 'tanggal_lahir', sortable: true },
-  { text: 'Jenis Kelamin', value: 'jenis_kelamin', sortable: true },
-  { text: 'Aksi', value: 'actions', sortable: false }
-]
-
-const totalItems = ref(0)
-const serverOptions = ref({
-  page: 1,
-  rowsPerPage: 5,
-  sortBy: '',
-  sortType: 'asc',
+const pagination = ref({
+  current_page: 1,
+  links: [],
+  prev_page_url: null,
+  next_page_url: null
 })
 
-const onServerOptionsUpdate = (options) => {
-  serverOptions.value = options
-  currentPage.value = options.page
-  perPage.value = options.rowsPerPage
-  sortBy.value = options.sortBy
-  sortDesc.value = options.sortType === 'desc'
-  getPasiens()
-}
-
-
-const getPasiens = async () => {
+const fetchPasiens = async (page = 1) => {
+  loading.value = true
   try {
-    const response = await axios.get('http://localhost:8000/api/pasiens', {
+    const response = await axios.get('/pasiens', {
       params: {
-        search: search.value,
-        page: currentPage.value,
-        per_page: perPage.value,
-        sort_by: sortBy.value,
-        sort_desc: sortDesc.value ? 'desc' : 'asc'
+        page,
+        per_page: perPage.value
       }
     })
-    pasiens.value = response.data.data
-    totalItems.value = response.data.total // <-- dari Laravel
-    lastPage.value = response.data.last_page
+    const data = response.data
+    pasiens.value = data.data
+    pagination.value = {
+      current_page: data.current_page,
+      links: data.links,
+      prev_page_url: data.prev_page_url,
+      next_page_url: data.next_page_url
+    }
   } catch (error) {
-    console.error('Gagal ambil data pasien', error)
+    console.error('Gagal fetch data:', error)
+    pasiens.value = []
+  } finally {
+    loading.value = false
   }
 }
 
-
-let typingTimeout = null
-const onSearchInput = () => {
-  clearTimeout(typingTimeout)
-  typingTimeout = setTimeout(() => {
-    currentPage.value = 1
-    getPasiens()
-  }, 300)
+const changePageFromUrl = (url) => {
+  if (!url) return
+  const urlObj = new URL(url)
+  const page = urlObj.searchParams.get('page')
+  if (page) fetchPasiens(parseInt(page))
 }
-
-const onPerPageChange = () => {
-  currentPage.value = 1
-  getPasiens()
-}
-
-const goToPage = (page) => {
-  if (page >= 1 && page <= lastPage.value) {
-    currentPage.value = page
-    getPasiens()
-  }
-}
-
-watch([sortBy, sortDesc], () => {
-  currentPage.value = 1
-  getPasiens()
-})
 
 onMounted(() => {
-  getPasiens()
+  fetchPasiens(1)
 })
-
-
-const exportExcel = () => {
-  const params = new URLSearchParams({
-    search: search.value,
-    sort_by: sortBy.value,
-    sort_desc: sortDesc.value ? 'desc' : 'asc'
-  })
-  window.open(`http://localhost:8000/api/pasiens/export/excel?${params.toString()}`, '_blank')
-}
-
-const exportPDF = () => {
-  const params = new URLSearchParams({
-    search: search.value,
-    sort_by: sortBy.value,
-    sort_desc: sortDesc.value ? 'desc' : 'asc'
-  })
-  window.open(`http://localhost:8000/api/pasiens/export/pdf?${params.toString()}`, '_blank')
-}
 </script>
-
-<style scoped>
-.toolbar {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.search-input {
-  padding: 6px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  flex-grow: 1;
-}
-
-.pagination {
-  margin-top: 16px;
-  display: flex;
-  justify-content: center;
-  gap: 10px;
-}
-
-.btn-green {
-  background-color: green;
-  color: white;
-  padding: 6px 12px;
-  border-radius: 4px;
-}
-
-.btn-red {
-  background-color: crimson;
-  color: white;
-  padding: 6px 12px;
-  border-radius: 4px;
-}
-
-.btn-warning {
-  background-color: orange;
-  color: white;
-  padding: 4px 10px;
-  border-radius: 4px;
-  margin-right: 4px;
-}
-
-.btn-danger {
-  background-color: red;
-  color: white;
-  padding: 4px 10px;
-  border-radius: 4px;
-}
-</style>
