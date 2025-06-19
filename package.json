@@ -1,12 +1,18 @@
 {
   "name": "klinik-frontend",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Frontend aplikasi klinik menggunakan Vue 3 + Tailwind + Vite",
+  "author": "Yogi Mardilah",
+  "license": "MIT",
+  "homepage": "https://yogimardilah.gitlab.io/klinik-frontend/",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint . --ext .vue,.js",
+    "format": "prettier --write ."
   },
   "dependencies": {
     "@heroicons/vue": "^2.2.0",
