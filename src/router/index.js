@@ -10,6 +10,9 @@ import DashboardDemo from '../views/DashboardDemo.vue'
 import Login from '../views/auth/Login.vue'
 import Register from '../views/auth/Register.vue'
 
+// Test components
+import ApiTest from '../views/ApiTest.vue'
+
 const routes = [
   // Public routes
   {
@@ -62,6 +65,17 @@ const routes = [
     meta: { 
       requiresAuth: true,
       title: 'Demo CardStats'
+    }
+  },
+
+  // Development/Testing routes
+  {
+    path: '/api-test',
+    name: 'ApiTest',
+    component: ApiTest,
+    meta: { 
+      title: 'API Integration Test',
+      // No auth required untuk testing
     }
   },
 
