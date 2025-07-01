@@ -1,149 +1,320 @@
-import axios from '@/plugins/axios'
+import axios from 'axios'
 
 /**
- * Base API Service untuk semua endpoint
+ * API Service
+ * Handles HTTP requests dengan automatic authentication dan error handling
  */
 class ApiService {
   constructor() {
+    this.baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'
+    this.timeout = 10000 // 10 seconds
+    
+    // Create axios instance
+    this.client = axios.create({
+      baseURL: this.baseURL,
+      timeout: this.timeout,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest'
+      }
+    })
+
     this.setupInterceptors()
   }
 
   setupInterceptors() {
-    // Request interceptor
-    axios.interceptors.request.use(
+    // Request interceptor untuk add auth token
+    this.client.interceptors.request.use(
       (config) => {
-        // Add auth token if available
-        const token = localStorage.getItem('auth_token')
+        // Add auth token jika tersedia
+        const token = this.getAuthToken()
         if (token) {
           config.headers.Authorization = `Bearer ${token}`
         }
-        
-        // Add timestamp untuk mencegah caching
-        config.params = {
-          ...config.params,
-          _t: Date.now()
+
+        // Log request untuk debugging
+        if (import.meta.env.DEV) {
+          console.log(`🚀 ${config.method?.toUpperCase()} ${config.url}`, {
+            data: config.data,
+            params: config.params
+          })
         }
-        
-        console.log(`API Request: ${config.method?.toUpperCase()} ${config.url}`, config.data)
+
         return config
       },
       (error) => {
-        console.error('Request Error:', error)
+        console.error('Request error:', error)
         return Promise.reject(error)
       }
     )
 
-    // Response interceptor
-    axios.interceptors.response.use(
+    // Response interceptor untuk handle errors dan token refresh
+    this.client.interceptors.response.use(
       (response) => {
-        console.log(`API Response: ${response.status}`, response.data)
+        // Log successful response untuk debugging
+        if (import.meta.env.DEV) {
+          console.log(`✅ ${response.config.method?.toUpperCase()} ${response.config.url}`, response.data)
+        }
+
         return response
       },
-      (error) => {
-        console.error('Response Error:', error.response || error)
-        
-        // Handle common errors
-        if (error.response?.status === 401) {
-          // Unauthorized - logout user
-          localStorage.removeItem('auth_token')
-          window.location.href = '/login'
+      async (error) => {
+        const originalRequest = error.config
+
+        // Log error untuk debugging
+        if (import.meta.env.DEV) {
+          console.error(`❌ ${error.config?.method?.toUpperCase()} ${error.config?.url}`, {
+            status: error.response?.status,
+            data: error.response?.data,
+            message: error.message
+          })
         }
-        
-        return Promise.reject(this.handleError(error))
+
+        // Handle 401 Unauthorized - token expired
+        if (error.response?.status === 401 && !originalRequest._retry) {
+          originalRequest._retry = true
+
+          try {
+            // Try to refresh token
+            await this.refreshAuthToken()
+            
+            // Retry original request dengan token baru
+            const newToken = this.getAuthToken()
+            if (newToken) {
+              originalRequest.headers.Authorization = `Bearer ${newToken}`
+              return this.client(originalRequest)
+            }
+          } catch (refreshError) {
+            // Refresh failed, redirect to login
+            this.handleAuthFailure()
+            return Promise.reject(refreshError)
+          }
+        }
+
+        // Handle 403 Forbidden
+        if (error.response?.status === 403) {
+          console.warn('Access forbidden - insufficient permissions')
+        }
+
+        // Handle 429 Too Many Requests
+        if (error.response?.status === 429) {
+          console.warn('Rate limit exceeded')
+        }
+
+        // Handle network errors
+        if (!error.response) {
+          console.error('Network error - server may be unreachable')
+        }
+
+        return Promise.reject(this.normalizeError(error))
       }
     )
   }
 
-  handleError(error) {
-    const errorResponse = {
-      message: 'Terjadi kesalahan pada server',
-      status: error.response?.status || 500,
-      data: error.response?.data || null
-    }
-
-    if (error.response?.data?.message) {
-      errorResponse.message = error.response.data.message
-    } else if (error.message === 'Network Error') {
-      errorResponse.message = 'Tidak dapat terhubung ke server. Periksa koneksi internet Anda.'
-    } else if (error.code === 'ECONNABORTED') {
-      errorResponse.message = 'Request timeout. Silakan coba lagi.'
-    }
-
-    return errorResponse
+  // Get auth token from localStorage
+  getAuthToken() {
+    return localStorage.getItem('auth_token')
   }
 
-  // GET request
+  // Get refresh token from localStorage
+  getRefreshToken() {
+    return localStorage.getItem('refresh_token')
+  }
+
+  // Refresh authentication token
+  async refreshAuthToken() {
+    const refreshToken = this.getRefreshToken()
+    if (!refreshToken) {
+      throw new Error('No refresh token available')
+    }
+
+    try {
+      // Make refresh request tanpa interceptor untuk avoid infinite loop
+      const response = await axios.post(`${this.baseURL}/auth/refresh`, {
+        refresh_token: refreshToken
+      }, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        }
+      })
+
+      const { token, refresh_token: newRefreshToken } = response.data
+
+      // Update tokens
+      localStorage.setItem('auth_token', token)
+      if (newRefreshToken) {
+        localStorage.setItem('refresh_token', newRefreshToken)
+      }
+
+      return token
+    } catch (error) {
+      // Clear invalid tokens
+      this.clearAuthTokens()
+      throw error
+    }
+  }
+
+  // Clear auth tokens
+  clearAuthTokens() {
+    localStorage.removeItem('auth_token')
+    localStorage.removeItem('auth_user')
+    localStorage.removeItem('refresh_token')
+  }
+
+  // Handle authentication failure
+  handleAuthFailure() {
+    this.clearAuthTokens()
+    
+    // Only redirect if not already on login page
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login'
+    }
+  }
+
+  // Normalize error response
+  normalizeError(error) {
+    if (error.response) {
+      // Server responded dengan error status
+      return {
+        status: error.response.status,
+        message: error.response.data?.message || error.message,
+        data: error.response.data,
+        errors: error.response.data?.errors
+      }
+    } else if (error.request) {
+      // Request dibuat tapi tidak ada response
+      return {
+        status: 0,
+        message: 'Network error - no response from server',
+        data: null
+      }
+    } else {
+      // Error dalam setup request
+      return {
+        status: 0,
+        message: error.message,
+        data: null
+      }
+    }
+  }
+
+  // HTTP Methods
   async get(url, params = {}) {
     try {
-      const response = await axios.get(url, { params })
+      const response = await this.client.get(url, { params })
       return response.data
     } catch (error) {
       throw error
     }
   }
 
-  // POST request
   async post(url, data = {}) {
     try {
-      const response = await axios.post(url, data)
+      const response = await this.client.post(url, data)
       return response.data
     } catch (error) {
       throw error
     }
   }
 
-  // PUT request
   async put(url, data = {}) {
     try {
-      const response = await axios.put(url, data)
+      const response = await this.client.put(url, data)
       return response.data
     } catch (error) {
       throw error
     }
   }
 
-  // PATCH request
   async patch(url, data = {}) {
     try {
-      const response = await axios.patch(url, data)
+      const response = await this.client.patch(url, data)
       return response.data
     } catch (error) {
       throw error
     }
   }
 
-  // DELETE request
-  async delete(url) {
+  async delete(url, params = {}) {
     try {
-      const response = await axios.delete(url)
+      const response = await this.client.delete(url, { params })
       return response.data
     } catch (error) {
       throw error
     }
   }
 
-  // Upload file
-  async upload(url, file, onProgress = null) {
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
+  // File upload method
+  async uploadFile(url, file, progressCallback = null) {
+    const formData = new FormData()
+    formData.append('file', file)
 
-      const config = {
+    try {
+      const response = await this.client.post(url, formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
+        },
+        onUploadProgress: (progressEvent) => {
+          if (progressCallback && progressEvent.total) {
+            const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+            progressCallback(progress)
+          }
         }
-      }
-
-      if (onProgress) {
-        config.onUploadProgress = onProgress
-      }
-
-      const response = await axios.post(url, formData, config)
+      })
       return response.data
     } catch (error) {
       throw error
     }
+  }
+
+  // Download file method
+  async downloadFile(url, filename = null) {
+    try {
+      const response = await this.client.get(url, {
+        responseType: 'blob'
+      })
+
+      // Create download link
+      const downloadUrl = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.setAttribute('download', filename || 'download')
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(downloadUrl)
+
+      return response.data
+    } catch (error) {
+      throw error
+    }
+  }
+
+  // Set auth token manually (untuk login)
+  setAuthToken(token) {
+    if (token) {
+      localStorage.setItem('auth_token', token)
+    }
+  }
+
+  // Check if authenticated
+  isAuthenticated() {
+    return !!this.getAuthToken()
+  }
+
+  // Get API base URL
+  getBaseURL() {
+    return this.baseURL
+  }
+
+  // Set timeout
+  setTimeout(timeout) {
+    this.timeout = timeout
+    this.client.defaults.timeout = timeout
   }
 }
 
+// Export singleton instance
 export default new ApiService()
